@@ -110,7 +110,7 @@ dcos:adminrouter:service:spark full
 dcos:service:marathon:marathon:services:/spark read
 ```
 
-TODO: Set correct permissions to retireve logs
+TODO: Set correct permissions to retrieve logs
 
 - Login as user `test`
 
@@ -135,6 +135,33 @@ dcos spark status driver-20170817131417-0006
 ```
 dcos spark log driver-20170817131417-0006
 ```
+
+## 3. Restart Spark Streaming Jobs if they are failing
+
+- Submit a long running Job and the flag --supervise
+
+```
+dcos spark run --verbose --submit-args="--supervise --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py"
+```
+
+- Find the node the driver is running on
+
+```
+dcos task
+```
+
+- Connect to the node and kill the task
+
+```
+docker ps
+docker kill <id>
+```
+
+The driver should be restarted.
+
+## 4. Use Secrets within your Spark Job
+
+## 5. Mount Volumes
 
 ## 6. Connect to the Driver UI
 
