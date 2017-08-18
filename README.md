@@ -226,23 +226,44 @@ The driver should be restarted.
 
 ### 3.2 Use Marathon for submitting the Spark Job
 
+- Create a `health_check.sh` file
+
+```
+#!/bin/bash
+# Get driver id > Write to file ${MESOS_SANDBOX}/spark-out
+driver=`awk '{print $6}' ${MESOS_SANDBOX}/spark-out | tail -1 | cut -d, -f 1`
+echo "found: $driver"
+# Connect to Mesos DNS > Read HostName
+ipaddress=`dcos task --json | jq --raw-output ".[] | select(.id == \"$driver\") | .statuses | .[].container_status | .network_infos | .[].ip_addresses | .[] | .ip_address"`
+echo "$driver runs on host: $ipaddress"
+# Do Health Check against HostName:4040
+curl -sSf http://$ipaddress:4040 > /dev/null
+```
+
 - Create a `Dockerfile` to install the Spark CLI
 
 ```
-$ cat > Dockerfile <<EOF
 FROM openjdk:8-jre-slim
 MAINTAINER Jan Repnak <jan.repnak@mesosphere.io>
-RUN apt-get update && apt-get install -y curl python3 python3-pip
+RUN apt-get update && apt-get install -y curl python3 python3-pip jq
 RUN pip3 install virtualenv
 ADD https://downloads.dcos.io/binaries/cli/linux/x86-64/dcos-1.9/dcos /usr/local/bin/dcos
 RUN chmod +x /usr/local/bin/dcos && dcos config set core.dcos_url https://leader.mesos && dcos config set core.ssl_verify false && dcos config set core.ssl_verify false && dcos auth login --username=admin --password=admin
 RUN dcos package install spark --cli
 RUN dcos spark run --help
-EOF
+COPY health_check.sh /
+RUN chmod +x /health_check.sh
 ```
 
 ```
 $ docker build -t janr/dcos-spark-cli:v1 .
+```
+
+- Place Jar or Python Script on the local filesystem of each DC/OS Agent
+
+```
+mdir /tmp/spark
+curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py -o /tmp/spark/streamingWordCount.py
 ```
 
 - Create a Marathon service definition to submit the Spark Job
@@ -250,13 +271,19 @@ $ docker build -t janr/dcos-spark-cli:v1 .
 ```json
 {
   "id": "/stream",
-  "cmd": "dcos config set core.dcos_acs_token $LOGIN_TOKEN && dcos spark run --submit-args=\"--conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py\" && sleep 99999",
+  "cmd": "dcos config set core.dcos_acs_token $LOGIN_TOKEN && dcos spark run --submit-args=\"--name wordcount --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${MESOS_SANDBOX}/spark-out && while true; do echo 'idle'; sleep 300; done",
   "instances": 1,
   "cpus": 0.5,
   "mem": 512,
   "container": {
     "type": "DOCKER",
-    "volumes": [],
+    "volumes": [
+      {
+        "containerPath": "/tmp/spark",
+        "hostPath": "/tmp/spark",
+        "mode": "RO"
+      }
+    ],
     "docker": {
       "image": "janr/dcos-spark-cli:v1",
       "portMappings": [],
@@ -265,6 +292,19 @@ $ docker build -t janr/dcos-spark-cli:v1 .
       "forcePullImage": false
     }
   },
+  "healthChecks": [
+    {
+      "gracePeriodSeconds": 300,
+      "intervalSeconds": 60,
+      "timeoutSeconds": 20,
+      "maxConsecutiveFailures": 3,
+      "delaySeconds": 15,
+      "command": {
+        "value": "/health_check.sh"
+      },
+      "protocol": "COMMAND"
+    }
+  ],
   "secrets": {
     "secret0": {
       "source": "stream-login"
