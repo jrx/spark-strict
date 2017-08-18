@@ -245,6 +245,39 @@ EOF
 $ docker build -t janr/dcos-spark-cli:v1 .
 ```
 
+- Create a Marathon service definition to submit the Spark Job
+
+```json
+{
+  "id": "/stream",
+  "cmd": "dcos config set core.dcos_acs_token $LOGIN_TOKEN && dcos spark run --submit-args=\"--conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py\" && sleep 99999",
+  "instances": 1,
+  "cpus": 0.5,
+  "mem": 512,
+  "container": {
+    "type": "DOCKER",
+    "volumes": [],
+    "docker": {
+      "image": "janr/dcos-spark-cli:v1",
+      "portMappings": [],
+      "privileged": false,
+      "parameters": [],
+      "forcePullImage": false
+    }
+  },
+  "secrets": {
+    "secret0": {
+      "source": "stream-login"
+    }
+  },
+  "env": {
+    "LOGIN_TOKEN": {
+      "secret": "secret0"
+    }
+  }
+}
+```
+
 ## 4. Use Secrets within your Spark Job
 
 ## 5. Mount Volumes
