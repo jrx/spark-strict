@@ -89,7 +89,7 @@ dcos package install --options=config.json spark
 dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image=mesosphere/spark:1.1.1-2.2.0-hadoop-2.6 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.containerizer=mesos --class org.apache.spark.examples.SparkPi https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
 ```
 
-## 2. Access driver logs without root permissions
+## 2. Start and access Spark without root permissions
 
 - Create a user `test` that has the following permissions
 
@@ -97,9 +97,8 @@ dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image
 dcos:adminrouter:service:marathon full
 dcos:adminrouter:service:spark full
 dcos:service:marathon:marathon:services:/spark read
+dcos:adminrouter:ops:mesos-dns full
 ```
-
-TODO: Set correct permissions to retrieve logs
 
 - Login as user `test`
 
@@ -113,16 +112,14 @@ dcos auth login
 dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image=mesosphere/spark:1.1.1-2.2.0-hadoop-2.6 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.containerizer=mesos --class org.apache.spark.examples.SparkPi https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
 ```
 
-- View the driver status
-
 ```
-dcos spark status driver-20170817131417-0006
+dcos task driver-20170817131417-0006
 ```
 
-- View the driver logs
+- Find driver ip address using Mesos DNS
 
 ```
-dcos spark log driver-20170817131417-0006
+https://leader.mesos/mesos_dns/v1/enumerate
 ```
 
 ## 3. Restart Spark Streaming Jobs if they are failing
