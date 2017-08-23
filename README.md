@@ -236,31 +236,91 @@ The driver should be restarted.
 
 ### 3.2 Use Marathon for submitting the Spark Job
 
-- Create a `health_check.sh` file
+- Create a `health_check.py` file
 
-```
-#!/bin/bash
-# Get driver id > Write to file ${MESOS_SANDBOX}/driver/spark-out
-driver=`awk '{print $6}' ${MESOS_SANDBOX}/driver/spark-out | tail -1 | cut -d, -f 1`
-echo "found: $driver"
-# Connect to Mesos DNS > Read HostName
-ipaddress=`/usr/local/bin/dcos task --json | jq --raw-output ".[] | select(.id == \"$driver\") | .statuses | .[].container_status | .network_infos | .[].ip_addresses | .[] | .ip_address"`
-echo "$driver runs on host: $ipaddress"
-# Do Health Check against HostName:4040
-curl -sSf http://$ipaddress:4040 > /dev/null
+```python
+#!/usr/bin/env python3
+'''
+check health of spark driver and executors
+'''
+
+import re
+import subprocess
+import requests
+import os
+
+def url_ok(url):
+    r = requests.head(url)
+    return r.status_code == 200
+
+# read filename from env
+file_name = str(os.environ['SPARK_SUBMIT_STDOUT'])
+f = open(file_name, "r+")
+spark_output = f.read()
+f.close()
+
+# parse driver id
+result = {}
+for row in spark_output.split('\n'):
+    if 'Submission id: ' in row:
+        result = row
+
+match = re.search(r'driver-(\d+)-(\d+)',result)
+if match:
+    driver_id = match.group(0)
+    print (driver_id)
+
+# parse ip address
+
+cmd = subprocess.Popen('dcos task ' + driver_id,
+                       shell=True,
+                       stdout=subprocess.PIPE)
+for line in cmd.stdout:
+    if driver_id in line.decode("utf-8"):
+        result = line.decode("utf-8")
+
+match = re.search(r'(\d+)\.(\d+)\.(\d+)\.(\d+)', result)
+if match:
+    ip_address = match.group(0)
+    print (ip_address)
+
+# check if spark driver is reachable
+print(url_ok("http://" + ip_address + ":4040"))
 ```
 
-- Create a `clean_up.sh` file
+- Create a `clean_up.py` file
 
-```
-#!/bin/bash
-# Get driver id > Write to file ${MESOS_SANDBOX}/driver/spark-out
-driver=`awk '{print $6}' ${MESOS_SANDBOX}/driver/spark-out | tail -1 | cut -d, -f 1`
-echo "found: $driver"
-# Kill the driver
-/usr/local/bin/dcos spark kill $driver
-# Remove spark-out file
-rm -Rf ${MESOS_SANDBOX}/driver/spark-out
+```python
+#!/usr/bin/env python3
+'''
+kill all running drivers for a specific job name
+'''
+
+import subprocess
+import re
+import os
+
+# read spark name from env
+spark_name = 'Driver for ' + str(os.environ['SPARK_NAME'])
+
+# parse drivers from task list
+cmd = subprocess.Popen('dcos task',
+                       shell=True,
+                       stdout=subprocess.PIPE)
+for line in cmd.stdout:
+    if spark_name in line.decode("utf-8"):
+        result = line.decode("utf-8")
+
+        match = re.search(r'driver-(\d+)-(\d+)', result)
+        if match:
+            driver_id = match.group(0)
+            print('found: ' + driver_id)
+
+            # kill spark driver
+            cmd = subprocess.Popen('dcos spark kill ' + driver_id,
+                                   shell=True,
+                                   stdout=subprocess.PIPE)
+            print(cmd)
 ```
 
 - Create a `Dockerfile` to install the Spark CLI
@@ -269,19 +329,19 @@ rm -Rf ${MESOS_SANDBOX}/driver/spark-out
 FROM openjdk:8-jre-slim
 MAINTAINER Jan Repnak <jan.repnak@mesosphere.io>
 RUN apt-get update && apt-get install -y curl python3 python3-pip jq
-RUN pip3 install virtualenv
+RUN pip3 install virtualenv requests
 ADD https://downloads.dcos.io/binaries/cli/linux/x86-64/dcos-1.9/dcos /usr/local/bin/dcos
 RUN chmod +x /usr/local/bin/dcos && dcos config set core.dcos_url https://leader.mesos && dcos config set core.ssl_verify false && dcos config set core.ssl_verify false && dcos auth login --username=admin --password=admin
 RUN dcos package install spark --cli
 RUN dcos spark run --help
-COPY health_check.sh /
-RUN chmod +x /health_check.sh
-COPY clean_up.sh /
-RUN chmod +x /clean_up.sh
+COPY health_check.py /
+RUN chmod +x /health_check.py
+COPY clean_up.py /
+RUN chmod +x /clean_up.py
 ```
 
 ```
-$ docker build -t janr/dcos-spark-cli:v4 .
+$ docker build -t janr/dcos-spark-cli:v5 .
 ```
 
 - Place Jar or Python Script on the local filesystem of each DC/OS Agent
@@ -296,19 +356,13 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
 ```json
 {
   "id": "/stream",
-  "cmd": "sleep 10 && /clean_up.sh || true; dcos config set core.dcos_acs_token $LOGIN_TOKEN && dcos spark run --submit-args=\"--name wordcount --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${MESOS_SANDBOX}/driver/spark-out && while true; do echo 'idle'; sleep 300; done",
+  "cmd": "sleep 10 && dcos config set core.dcos_acs_token $LOGIN_TOKEN && /clean_up.py || true && dcos spark run --submit-args=\"--name ${SPARK_NAME} --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${SPARK_SUBMIT_STDOUT} && while true; do echo 'idle'; sleep 300; done",
   "user": "root",
   "instances": 1,
   "cpus": 0.5,
   "mem": 512,
   "disk": 0,
   "gpus": 0,
-  "constraints": [],
-  "fetch": [],
-  "storeUrls": [],
-  "backoffSeconds": 1,
-  "backoffFactor": 1.15,
-  "maxLaunchDelaySeconds": 3600,
   "container": {
     "type": "DOCKER",
     "volumes": [
@@ -316,19 +370,10 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
         "containerPath": "/tmp/spark",
         "hostPath": "/tmp/spark",
         "mode": "RO"
-      },
-      {
-        "containerPath": "driver",
-        "mode": "RW",
-        "persistent": {
-          "size": 100,
-          "type": "root",
-          "constraints": []
-        }
       }
     ],
     "docker": {
-      "image": "janr/dcos-spark-cli:v4",
+      "image": "janr/dcos-spark-cli:v5",
       "portMappings": [],
       "privileged": false,
       "parameters": [],
@@ -343,28 +388,16 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
       "maxConsecutiveFailures": 5,
       "delaySeconds": 15,
       "command": {
-        "value": "/health_check.sh"
+        "value": "/health_check.py"
       },
       "protocol": "COMMAND"
     }
   ],
-  "readinessChecks": [],
-  "dependencies": [],
-  "upgradeStrategy": {
-    "minimumHealthCapacity": 0.5,
-    "maximumOverCapacity": 0
-  },
-  "residency": {
-    "relaunchEscalationTimeoutSeconds": 10,
-    "taskLostBehavior": "WAIT_FOREVER"
-  },
   "secrets": {
     "secret0": {
       "source": "stream-login"
     }
   },
-  "unreachableStrategy": "disabled",
-  "killSelection": "YOUNGEST_FIRST",
   "portDefinitions": [
     {
       "port": 0,
@@ -376,7 +409,9 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
   "env": {
     "LOGIN_TOKEN": {
       "secret": "secret0"
-    }
+    },
+    "SPARK_SUBMIT_STDOUT": "/mnt/mesos/sandbox/spark-out",
+    "SPARK_NAME": "wordcount"
   }
 }
 ```
