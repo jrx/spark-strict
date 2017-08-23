@@ -229,8 +229,8 @@ The driver should be restarted.
 
 ```
 #!/bin/bash
-# Get driver id > Write to file ${MESOS_SANDBOX}/spark-out
-driver=`awk '{print $6}' ${MESOS_SANDBOX}/spark-out | tail -1 | cut -d, -f 1`
+# Get driver id > Write to file ${MESOS_SANDBOX}/driver/spark-out
+driver=`awk '{print $6}' ${MESOS_SANDBOX}/driver/spark-out | tail -1 | cut -d, -f 1`
 echo "found: $driver"
 # Connect to Mesos DNS > Read HostName
 ipaddress=`/usr/local/bin/dcos task --json | jq --raw-output ".[] | select(.id == \"$driver\") | .statuses | .[].container_status | .network_infos | .[].ip_addresses | .[] | .ip_address"`
@@ -243,11 +243,13 @@ curl -sSf http://$ipaddress:4040 > /dev/null
 
 ```
 #!/bin/bash
-# Get driver id > Write to file ${MESOS_SANDBOX}/spark-out
-driver=`awk '{print $6}' ${MESOS_SANDBOX}/spark-out | tail -1 | cut -d, -f 1`
+# Get driver id > Write to file ${MESOS_SANDBOX}/driver/spark-out
+driver=`awk '{print $6}' ${MESOS_SANDBOX}/driver/spark-out | tail -1 | cut -d, -f 1`
 echo "found: $driver"
 # Kill the driver
 /usr/local/bin/dcos spark kill $driver
+# Remove spark-out file
+rm -Rf ${MESOS_SANDBOX}/driver/spark-out
 ```
 
 - Create a `Dockerfile` to install the Spark CLI
@@ -268,7 +270,7 @@ RUN chmod +x /clean_up.sh
 ```
 
 ```
-$ docker build -t janr/dcos-spark-cli:v2 .
+$ docker build -t janr/dcos-spark-cli:v4 .
 ```
 
 - Place Jar or Python Script on the local filesystem of each DC/OS Agent
@@ -283,9 +285,9 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
 ```json
 {
   "id": "/stream",
-  "cmd": "trap '/clean_up.sh' TERM; dcos config set core.dcos_acs_token $LOGIN_TOKEN && dcos spark run --submit-args=\"--name wordcount --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${MESOS_SANDBOX}/spark-out && while true; do echo 'idle'; sleep 300; done",
+  "cmd": "sleep 10 && /clean_up.sh || true; dcos config set core.dcos_acs_token $LOGIN_TOKEN && dcos spark run --submit-args=\"--name wordcount --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${MESOS_SANDBOX}/driver/spark-out && while true; do echo 'idle'; sleep 300; done",
   "user": "root",
-  "instances": 0,
+  "instances": 1,
   "cpus": 0.5,
   "mem": 512,
   "disk": 0,
@@ -303,10 +305,23 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
         "containerPath": "/tmp/spark",
         "hostPath": "/tmp/spark",
         "mode": "RO"
+      },
+      {
+        "containerPath": "driver",
+        "mode": "RW",
+        "persistent": {
+          "size": 100,
+          "type": "root",
+          "constraints": []
+        }
       }
     ],
     "docker": {
-      "image": "janr/dcos-spark-cli:v3"
+      "image": "janr/dcos-spark-cli:v4",
+      "portMappings": [],
+      "privileged": false,
+      "parameters": [],
+      "forcePullImage": false
     }
   },
   "healthChecks": [
@@ -314,7 +329,7 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
       "gracePeriodSeconds": 300,
       "intervalSeconds": 60,
       "timeoutSeconds": 20,
-      "maxConsecutiveFailures": 20,
+      "maxConsecutiveFailures": 5,
       "delaySeconds": 15,
       "command": {
         "value": "/health_check.sh"
@@ -325,18 +340,19 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
   "readinessChecks": [],
   "dependencies": [],
   "upgradeStrategy": {
-    "minimumHealthCapacity": 1,
-    "maximumOverCapacity": 1
+    "minimumHealthCapacity": 0.5,
+    "maximumOverCapacity": 0
+  },
+  "residency": {
+    "relaunchEscalationTimeoutSeconds": 10,
+    "taskLostBehavior": "WAIT_FOREVER"
   },
   "secrets": {
     "secret0": {
       "source": "stream-login"
     }
   },
-  "unreachableStrategy": {
-    "inactiveAfterSeconds": 300,
-    "expungeAfterSeconds": 600
-  },
+  "unreachableStrategy": "disabled",
   "killSelection": "YOUNGEST_FIRST",
   "portDefinitions": [
     {
