@@ -94,21 +94,14 @@ dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image
 - Create a user `test` that has the following permissions
 
 ```
+dcos:adminrouter:ops:mesos full
+dcos:adminrouter:ops:mesos-dns full
+dcos:adminrouter:ops:slave full
 dcos:adminrouter:service:marathon full
 dcos:adminrouter:service:spark full
-dcos:service:marathon:marathon:services:/spark read
-dcos:adminrouter:ops:mesos full
-dcos:adminrouter:ops:slave full
-dcos:mesos:agent:executor:app_id:/spark read
-dcos:mesos:agent:framework:role:slave_public/ read
-dcos:mesos:agent:sandbox:app_id:/spark read
-dcos:mesos:agent:task:app_id:/spark read
-dcos:mesos:master:executor:app_id:/spark read
-dcos:mesos:master:framework:role:slave_public/ read
-dcos:mesos:master:task:app_id:/spark/ read
-dcos:mesos:master:framework:role:slave/ read
-dcos:mesos:agent:framework:role:slave/ read
-dcos:adminrouter:ops:mesos-dns full
+dcos:mesos:agent:framework:role full
+dcos:mesos:master:framework:role full
+dcos:service:marathon:marathon:services:/spark read 
 ```
 
 - Login as user `test`
