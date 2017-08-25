@@ -5,16 +5,14 @@ kill all running drivers for a specific job name
 
 import subprocess
 import json
+import os
 
 # read spark name from env
 spark_name = 'Driver for ' + str(os.environ['SPARK_NAME'])
 
 # parse drivers from task list
-cmd_read = subprocess.Popen('dcos task --json',
-                       shell=True,
-                       stdout=subprocess.PIPE)
-
-data = json.load(cmd_read.stdout)
+cmd_read = subprocess.getoutput("dcos task --json")
+data = json.loads(cmd_read)
 
 # parse drivers from task list
 for task in data:
@@ -22,7 +20,5 @@ for task in data:
         print('Found ' + task["id"])
 
         # kill spark driver
-        cmd_kill = subprocess.Popen('dcos spark kill ' + task["id"],
-                                    shell=True,
-                                    stdout=subprocess.PIPE)
+        cmd_kill = subprocess.getoutput('dcos spark kill ' + task["id"])
         print(cmd_kill)

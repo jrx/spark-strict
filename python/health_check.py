@@ -7,7 +7,7 @@ import re
 import subprocess
 import requests
 import json
-
+import os
 
 def url_ok(url):
     r = requests.head(url)
@@ -30,14 +30,11 @@ if match:
     driver_id = match.group(0)
     print('Found Driver ID: ' + driver_id)
 
+# retrieve task list
+cmd_read = subprocess.getoutput("dcos task --json " + driver_id)
+data = json.loads(cmd_read)
+
 # parse ip address
-cmd = subprocess.Popen('dcos task --json ' + driver_id,
-                       shell=True,
-                       stdout=subprocess.PIPE)
-
-data = json.load(cmd.stdout)
-
-# parse drivers from task list
 for task in data:
     if task["id"] == driver_id:
         ip_address = task["statuses"][0]["container_status"]["network_infos"][0]["ip_addresses"][0]["ip_address"]
