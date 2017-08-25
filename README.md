@@ -241,12 +241,13 @@ The driver should be restarted.
 ```python
 #!/usr/bin/env python3
 '''
-check health of spark driver and executors
+check health of the spark driver
 '''
 
 import re
 import subprocess
 import requests
+import json
 import os
 
 def url_ok(url):
@@ -268,21 +269,17 @@ for row in spark_output.split('\n'):
 match = re.search(r'driver-(\d+)-(\d+)',result)
 if match:
     driver_id = match.group(0)
-    print (driver_id)
+    print('Found Driver ID: ' + driver_id)
+
+# retrieve task list
+cmd_read = subprocess.getoutput("dcos task --json " + driver_id)
+data = json.loads(cmd_read)
 
 # parse ip address
-
-cmd = subprocess.Popen('dcos task ' + driver_id,
-                       shell=True,
-                       stdout=subprocess.PIPE)
-for line in cmd.stdout:
-    if driver_id in line.decode("utf-8"):
-        result = line.decode("utf-8")
-
-match = re.search(r'(\d+)\.(\d+)\.(\d+)\.(\d+)', result)
-if match:
-    ip_address = match.group(0)
-    print (ip_address)
+for task in data:
+    if task["id"] == driver_id:
+        ip_address = task["statuses"][0]["container_status"]["network_infos"][0]["ip_addresses"][0]["ip_address"]
+        print('Found IP address: ' + ip_address)
 
 # check if spark driver is reachable
 print(url_ok("http://" + ip_address + ":4040"))
@@ -297,30 +294,24 @@ kill all running drivers for a specific job name
 '''
 
 import subprocess
-import re
+import json
 import os
 
 # read spark name from env
 spark_name = 'Driver for ' + str(os.environ['SPARK_NAME'])
 
 # parse drivers from task list
-cmd = subprocess.Popen('dcos task',
-                       shell=True,
-                       stdout=subprocess.PIPE)
-for line in cmd.stdout:
-    if spark_name in line.decode("utf-8"):
-        result = line.decode("utf-8")
+cmd_read = subprocess.getoutput("dcos task --json")
+data = json.loads(cmd_read)
 
-        match = re.search(r'driver-(\d+)-(\d+)', result)
-        if match:
-            driver_id = match.group(0)
-            print('found: ' + driver_id)
+# parse drivers from task list
+for task in data:
+    if task["name"] == spark_name:
+        print('Found ' + task["id"])
 
-            # kill spark driver
-            cmd = subprocess.Popen('dcos spark kill ' + driver_id,
-                                   shell=True,
-                                   stdout=subprocess.PIPE)
-            print(cmd)
+        # kill spark driver
+        cmd_kill = subprocess.getoutput('dcos spark kill ' + task["id"])
+        print(cmd_kill)
 ```
 
 - Create a `Dockerfile` to install the Spark CLI
@@ -341,7 +332,7 @@ RUN chmod +x /clean_up.py
 ```
 
 ```
-$ docker build -t janr/dcos-spark-cli:v5 .
+$ docker build -t janr/dcos-spark-cli:v6 .
 ```
 
 - Place Jar or Python Script on the local filesystem of each DC/OS Agent
@@ -373,7 +364,7 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
       }
     ],
     "docker": {
-      "image": "janr/dcos-spark-cli:v5",
+      "image": "janr/dcos-spark-cli:v6",
       "portMappings": [],
       "privileged": false,
       "parameters": [],
