@@ -89,9 +89,17 @@ dcos package install --options=config.json spark
 dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image=mesosphere/spark:1.1.1-2.2.0-hadoop-2.6 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.containerizer=mesos --class org.apache.spark.examples.SparkPi https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
 ```
 
-## 2. Start and access Spark without root permissions
+## 2. Create Service Account to start Spark without root permissions
 
-- Create a user `test` that has the following permissions
+- Create a service account called `stream-principal`
+
+```
+dcos security org service-accounts keypair stream-private.pem stream-public.pem
+dcos security org service-accounts create -p stream-public.pem -d "Spark Streaming Job service account" stream-principal
+dcos security secrets create-sa-secret --strict stream-private.pem stream-principal stream/secret
+```
+
+- Set the following permissions for the service account
 
 ```
 dcos:adminrouter:ops:mesos full
@@ -101,7 +109,7 @@ dcos:adminrouter:service:marathon full
 dcos:adminrouter:service:spark full
 dcos:mesos:agent:framework:role full
 dcos:mesos:master:framework:role full
-dcos:service:marathon:marathon:services:/spark read 
+dcos:service:marathon:marathon:services:/spark read
 ```
 
 - Login as user `test`
@@ -209,7 +217,7 @@ dcos kafka topic create mytopic --replication=2 --partitions=4
 - Submit a long running Job and set the flag --supervise to keep restart the driver, if it's failing
 
 ```
-dcos spark run --verbose --submit-args="--supervise --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py"
+dcos spark run --verbose --submit-args="--supervise --conf spark.cores.max=6 --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py"
 ```
 
 - Find the node the driver is running on
@@ -340,7 +348,7 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
 ```json
 {
   "id": "/stream",
-  "cmd": "sleep 10 && dcos config set core.dcos_acs_token $LOGIN_TOKEN && /clean_up.py || true && dcos spark run --submit-args=\"--name ${SPARK_NAME} --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${SPARK_SUBMIT_STDOUT} && while true; do echo 'idle'; sleep 300; done",
+  "cmd": "sleep 10 && dcos config set core.dcos_acs_token $LOGIN_TOKEN && /clean_up.py || true && dcos spark run --submit-args=\"--name ${SPARK_NAME} --conf spark.cores.max=6 --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${SPARK_SUBMIT_STDOUT} && while true; do echo 'idle'; sleep 300; done",
   "user": "root",
   "instances": 1,
   "cpus": 0.5,
@@ -400,17 +408,9 @@ curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw
 }
 ```
 
-## 4. Use Secrets within your Spark Job
+## 5. Connect to the Driver UI
 
-## 5. Mount Volumes
-
-## 6. Connect to the Driver UI
-
- - Submit a long running Job
-
-```bash
-$ dcos spark run --docker-image=janr/spark-streaming-kafka:v2 --submit-args="https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py"
-```
+- Submit a long running Job
 
 - **Example 1:** Do port forwarding using SSH
 
