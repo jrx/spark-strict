@@ -62,18 +62,12 @@ curl -X PUT -k \
 
 ```json
 {
-   "security": {
-       "mesos": {
-           "authentication": {
-               "secret_name": "spark/secret"
-           }
-       }
-   },
-   "service": {
-       "principal": "spark-principal",
-       "secret": "spark/secret",
-       "user": "root"
-   }
+  "service": {
+    "name": "spark",
+    "service_account": "spark-principal",
+    "service_account_secret": "spark/secret",
+    "user": "nobody"
+  }
 }
 ```
 
@@ -195,10 +189,11 @@ curl -X PUT -k \
 ```
 {
   "service": {
-    "principal": "kafka-principal",
-    "secret_name": "kafka/secret",
-    "user": "nobody"
-  }
+    "name": "kafka",
+    "user": "nobody",
+    "service_account": "kafka-principal",
+    "service_account_secret": "kafka/secret"
+    }
 }
 ```
 
