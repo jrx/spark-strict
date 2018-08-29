@@ -4,440 +4,242 @@
 
 - Setup service account and secret
 
-```bash
-dcos security org service-accounts keypair spark-private.pem spark-public.pem
-dcos security org service-accounts create -p spark-public.pem -d "Spark service account" spark-principal
-dcos security secrets create-sa-secret --strict spark-private.pem spark-principal spark/secret
-```
-
-- Create permissions for the Spark Service Account¬ (Note: Some of them already exist.)
-
-```bash
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:agent:task:user:root \
--d '{"description":"Allows Linux user root to execute tasks"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" "$(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:framework:role:*" \
--d '{"description":"Allows a framework to register with the Mesos master using the Mesos default role"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" "$(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:app_id:%252Fspark" \
--d '{"description":"Allow to read the task state"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:user:nobody \
--d '{"description":"Allows Linux user nobody to execute tasks"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:user:root \
--d '{"description":"Allows Linux user root to execute tasks"}' \
--H 'Content-Type: application/json'
+```shell
+dcos security org service-accounts keypair /tmp/spark-private.pem /tmp/spark-public.pem
+dcos security org service-accounts create -p /tmp/spark-public.pem -d "Spark service account" spark-principal
+dcos security secrets create-sa-secret --strict /tmp/spark-private.pem spark-principal spark/secret
 ```
 
 - Grant permissions to the Spark Service Account
 
-```bash
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:agent:task:user:root/users/spark-principal/create
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" "$(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:framework:role:*/users/spark-principal/create"
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" "$(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:app_id:%252Fspark/users/spark-principal/create"
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:user:nobody/users/spark-principal/create
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:user:root/users/spark-principal/create
+```shell
+dcos security org users grant spark-principal dcos:mesos:agent:task:user:root create
+dcos security org users grant spark-principal "dcos:mesos:master:framework:role:*" create
+dcos security org users grant spark-principal dcos:mesos:master:task:app_id:/spark create
+dcos security org users grant spark-principal dcos:mesos:master:task:user:nobody create
+dcos security org users grant spark-principal dcos:mesos:master:task:user:root create
 ```
 
 - Grant  permissions to Marathon in order to the Spark the dispatcher in root
 
-```bash
-# Grant permissions to Marathon
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:user:root/users/dcos_marathon/create
+```shell
+dcos security org users grant dcos_marathon dcos:mesos:master:task:user:root create
 ```
 
-- Create a file **config.json** and set the Spark principal and secret
+- Create a configurationfile **/tmp/spark.json** and set the Spark principal and secret
 
 ```json
+cat <<EOF > /tmp/spark.json
 {
   "service": {
     "name": "spark",
     "service_account": "spark-principal",
     "service_account_secret": "spark/secret",
-    "user": "nobody"
+    "user": "root"
   }
 }
+EOF
 ```
 
 - Install Spark using the config.json file
 
-```
-dcos package install --options=config.json spark
-```
-
-- As a workaround add additional flags to the Spark run command
-
-```bash
-dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image=mesosphere/spark:1.1.1-2.2.0-hadoop-2.6 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.containerizer=mesos --class org.apache.spark.examples.SparkPi https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
+```shell
+dcos package install --options=/tmp/spark.json spark --yes
 ```
 
-## 2. Create Service Account to start Spark without root permissions
+- Add the name of the principal to the Spark run command
 
-- Create a service account called `stream-principal`
-
+```shell
+dcos spark run --verbose --submit-args=" \
+--conf spark.mesos.executor.docker.image=mesosphere/spark:2.3.1-2.2.1-2-hadoop-2.6 \
+--conf spark.mesos.executor.docker.forcePullImage=true \
+--conf spark.mesos.containerizer=mesos \
+--conf spark.mesos.principal=spark-principal \
+--class org.apache.spark.examples.SparkPi \
+https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
 ```
-dcos security org service-accounts keypair stream-private.pem stream-public.pem
-dcos security org service-accounts create -p stream-public.pem -d "Spark Streaming Job service account" stream-principal
-dcos security secrets create-sa-secret --strict stream-private.pem stream-principal stream/secret
+
+## 2. Create IAM user to start Spark jobs without root permissions
+
+- Create a user called `test`
+
+```shell
+dcos security org users create test --password test123
 ```
 
 - Set the following permissions for the service account
 
-```
-dcos:adminrouter:ops:mesos full
-dcos:adminrouter:ops:mesos-dns full
-dcos:adminrouter:ops:slave full
-dcos:adminrouter:service:marathon full
-dcos:adminrouter:service:spark full
-dcos:mesos:agent:framework:role full
-dcos:mesos:master:framework:role full
-dcos:service:marathon:marathon:services:/spark read
+```shell
+dcos security org users grant test dcos:adminrouter:ops:mesos full
+dcos security org users grant test dcos:adminrouter:ops:mesos-dns full
+dcos security org users grant test dcos:adminrouter:ops:slave full
+dcos security org users grant test dcos:adminrouter:service:marathon full
+dcos security org users grant test dcos:adminrouter:service:spark full
+dcos security org users grant test dcos:mesos:agent:framework:role full
+dcos security org users grant test dcos:mesos:master:framework:role full
+dcos security org users grant test dcos:service:marathon:marathon:services:/spark read
 ```
 
 - Login as user `test`
 
-```
-dcos auth login
+```shell
+dcos auth login --username=test --password=test123
 ```
 
 - Submit a Spark Job
 
-```
-dcos spark run --verbose --submit-args="--conf spark.mesos.executor.docker.image=mesosphere/spark:1.1.1-2.2.0-hadoop-2.6 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.containerizer=mesos --class org.apache.spark.examples.SparkPi https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
+```shell
+dcos spark run --verbose --submit-args=" \
+--conf spark.mesos.executor.docker.image=mesosphere/spark:2.3.1-2.2.1-2-hadoop-2.6 \
+--conf spark.mesos.executor.docker.forcePullImage=true \
+--conf spark.mesos.containerizer=mesos \
+--conf spark.mesos.principal=spark-principal \
+--class org.apache.spark.examples.SparkPi \
+https://downloads.mesosphere.com/spark/assets/spark-examples_2.11-2.0.1.jar 30"
 ```
 
 - Find driver ip address using dcos spark status
 
-```
+```shell
 dcos spark status driver-20170817131417-0006
 ```
 
-- Find driver ip address using Mesos DNS
-
-```
-https://leader.mesos/mesos_dns/v1/enumerate
-```
-
-## 3. Restart Spark Streaming Jobs if they are failing
+## 3. Submit and restart Spark Streaming Jobs if they are failing
 
 - For this demo install Kafka in Strict Mode
 
-```
-dcos security org service-accounts keypair kafka-private-key.pem kafka-public-key.pem
-dcos security org service-accounts create -p kafka-public-key.pem -d "Kafka service account" kafka-principal
-dcos security secrets create-sa-secret --strict kafka-private-key.pem kafka-principal kafka/secret
-```
-
-- Create permissions for Kafka
-
-```
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:framework:role:kafka-role \
--d '{"description":"Controls the ability of kafka-role to register as a framework with the Mesos master"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:reservation:role:kafka-role \
--d '{"description":"Controls the ability of kafka-role to reserve resources"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:volume:role:kafka-role \
--d '{"description":"Controls the ability of kafka-role to access volumes"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:reservation:principal:kafka-principal \
--d '{"description":"Controls the ability of kafka-principal to reserve resources"}' \
--H 'Content-Type: application/json'
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:volume:principal:kafka-principal \
--d '{"description":"Controls the ability of kafka-principal to access volumes"}' \
--H 'Content-Type: application/json'  
+```shell
+dcos security org service-accounts keypair /tmp/kafka-private-key.pem /tmp/kafka-public-key.pem
+dcos security org service-accounts create -p /tmp/kafka-public-key.pem -d "Kafka service account" kafka-principal
+dcos security secrets create-sa-secret --strict /tmp/kafka-private-key.pem kafka-principal kafka/secret
 ```
 
 - Grant Permissions to Kafka
 
-```
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:framework:role:kafka-role/users/kafka-principal/create
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:reservation:role:kafka-role/users/kafka-principal/create
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:volume:role:kafka-role/users/kafka-principal/create
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:task:user:nobody/users/kafka-principal/create
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:reservation:principal:kafka-principal/users/kafka-principal/delete
-curl -X PUT -k \
--H "Authorization: token=$(dcos config show core.dcos_acs_token)" $(dcos config show core.dcos_url)/acs/api/v1/acls/dcos:mesos:master:volume:principal:kafka-principal/users/kafka-principal/delete
+```shell
+dcos security org users grant kafka-principal dcos:mesos:master:framework:role:kafka-role create
+dcos security org users grant kafka-principal dcos:mesos:master:reservation:role:kafka-role create
+dcos security org users grant kafka-principal dcos:mesos:master:volume:role:kafka-role create
+dcos security org users grant kafka-principal dcos:mesos:master:task:user:nobody create
+dcos security org users grant kafka-principal dcos:mesos:master:reservation:principal:kafka-principal delete
+dcos security org users grant kafka-principal dcos:mesos:master:volume:principal:kafka-principal delete
 ```
 
-- Install Kafka
+- Create Kafka configuration file **/tmp/spark.json**
 
-**config.json**
-
-```
+```shell
+cat <<EOF > /tmp/kafka.json
 {
   "service": {
     "name": "kafka",
     "user": "nobody",
     "service_account": "kafka-principal",
     "service_account_secret": "kafka/secret"
-    }
+  }
 }
+EOF
 ```
 
-```
-dcos package install --options=config.json kafka
+- Install Kafka
+
+```shell
+dcos package install --options=/tmp/kafka.json kafka
 ```
 
 - Setup a topic
 
-```
+```shell
 dcos kafka topic create mytopic --replication=2 --partitions=4
 ```
 
 ### 3.1 Use --supervise flag
 
-- Submit a long running Job and set the flag --supervise to keep restart the driver, if it's failing
+- Submit a long running Job and set the flag `--supervise` to automatically restart the driver, if it's failing
 
-```
-dcos spark run --verbose --submit-args="--supervise --conf spark.cores.max=6 --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py"
-```
-
-- Find the node the driver is running on
-
-```
-dcos spark status <driver-id>
-```
-
-- Connect to the node and kill the task
-
-```
-docker ps
-docker kill <container-id>
+```shell
+dcos spark run --verbose --submit-args=" \
+--supervise \
+--conf spark.app.name=wordcount \
+--conf spark.mesos.containerizer=mesos \
+--conf spark.mesos.principal=spark-principal \
+--conf spark.mesos.driverEnv.SPARK_USER=root \
+--conf spark.cores.max=6 \
+--conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:2.1.0-2.2.1-1-hadoop-2.6-nobody-99 \
+--conf spark.mesos.executor.docker.forcePullImage=true \
+https://gist.githubusercontent.com/jrx/56e72ada489bf36646525c34fdaa7d63/raw/90df6046886e7c50fb18ea258a7be343727e944c/streamingWordCount-CNI.py"
 ```
 
-The driver should be restarted.
+- Jump into the container of the Spark driver and kill all processes
+
+```shell
+dcos task exec -it driver-20180829130652-0008 bash
+kill -9 -1
+```
+
+The driver should be automatically restarted.
+
+- You can kill the driver by running:
+
+```shell
+dcos spark kill driver-20180829130652-0008
+```
 
 ### 3.2 Use Marathon for submitting the Spark Job
-
-- Create a `health_check.py` file
-
-```python
-#!/usr/bin/env python3
-'''
-check health of the spark driver
-'''
-
-import re
-import subprocess
-import requests
-import json
-import os
-
-def url_ok(url):
-    r = requests.head(url)
-    return r.status_code == 200
-
-# read filename from env
-file_name = str(os.environ['SPARK_SUBMIT_STDOUT'])
-f = open(file_name, "r+")
-spark_output = f.read()
-f.close()
-
-# parse driver id
-result = {}
-for row in spark_output.split('\n'):
-    if 'Submission id: ' in row:
-        result = row
-
-match = re.search(r'driver-(\d+)-(\d+)',result)
-if match:
-    driver_id = match.group(0)
-    print('Found Driver ID: ' + driver_id)
-
-# retrieve task list
-cmd_read = subprocess.getoutput("dcos task --json " + driver_id)
-data = json.loads(cmd_read)
-
-# parse ip address
-for task in data:
-    if task["id"] == driver_id:
-        ip_address = task["statuses"][0]["container_status"]["network_infos"][0]["ip_addresses"][0]["ip_address"]
-        print('Found IP address: ' + ip_address)
-
-# check if spark driver is reachable
-print(url_ok("http://" + ip_address + ":4040"))
-```
-
-- Create a `clean_up.py` file
-
-```python
-#!/usr/bin/env python3
-'''
-kill all running drivers for a specific job name
-'''
-
-import subprocess
-import json
-import os
-
-# read spark name from env
-spark_name = 'Driver for ' + str(os.environ['SPARK_NAME'])
-
-# parse drivers from task list
-cmd_read = subprocess.getoutput("dcos task --json")
-data = json.loads(cmd_read)
-
-# parse drivers from task list
-for task in data:
-    if task["name"] == spark_name:
-        print('Found ' + task["id"])
-
-        # kill spark driver
-        cmd_kill = subprocess.getoutput('dcos spark kill ' + task["id"])
-        print(cmd_kill)
-```
-
-- Create a `Dockerfile` to install the Spark CLI
-
-```
-FROM openjdk:8-jre-slim
-MAINTAINER Jan Repnak <jan.repnak@mesosphere.io>
-RUN apt-get update && apt-get install -y curl python3 python3-pip jq
-RUN pip3 install virtualenv requests
-ADD https://downloads.dcos.io/binaries/cli/linux/x86-64/dcos-1.9/dcos /usr/local/bin/dcos
-RUN chmod +x /usr/local/bin/dcos && dcos config set core.dcos_url https://leader.mesos && dcos config set core.ssl_verify false && dcos config set core.ssl_verify false && dcos auth login --username=admin --password=admin
-RUN dcos package install spark --cli
-RUN dcos spark run --help
-COPY health_check.py /
-RUN chmod +x /health_check.py
-COPY clean_up.py /
-RUN chmod +x /clean_up.py
-```
-
-```
-$ docker build -t janr/dcos-spark-cli:v6 .
-```
-
-- Place Jar or Python Script on the local filesystem of each DC/OS Agent
-
-```
-mdir /tmp/spark
-curl https://gist.githubusercontent.com/jrx/436a3779403158753cefaeae747de40b/raw/3e4725e7f28fca30baeb8aaaebc6189510799719/streamingWordCount.py -o /tmp/spark/streamingWordCount.py
-```
-
-- Create a Marathon service definition to submit the Spark Job
 
 ```json
 {
   "id": "/stream",
-  "cmd": "sleep 10 && dcos config set core.dcos_acs_token $LOGIN_TOKEN && /clean_up.py || true && dcos spark run --submit-args=\"--name ${SPARK_NAME} --conf spark.cores.max=6 --conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:v2 --conf spark.mesos.executor.docker.forcePullImage=true --conf spark.mesos.principal=spark-principal --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_DIR=.ssl/ --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CA_FILE=.ssl/ca.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_CERT_FILE=.ssl/scheduler.crt --conf spark.mesos.driverEnv.LIBPROCESS_SSL_KEY_FILE=.ssl/scheduler.key --conf spark.mesos.driverEnv.MESOS_MODULES=file:///opt/mesosphere/etc/mesos-scheduler-modules/dcos_authenticatee_module.json --conf spark.mesos.driverEnv.MESOS_AUTHENTICATEE=com_mesosphere_dcos_ClassicRPCAuthenticatee --conf spark.mesos.executor.docker.volumes=/tmp/spark:/tmp/spark:ro /tmp/spark/streamingWordCount.py\" > ${SPARK_SUBMIT_STDOUT} && while true; do echo 'idle'; sleep 300; done",
-  "user": "root",
+  "cpus": 1,
+  "mem": 1024,
   "instances": 1,
-  "cpus": 0.5,
-  "mem": 512,
-  "disk": 0,
-  "gpus": 0,
-  "container": {
-    "type": "DOCKER",
-    "volumes": [
-      {
-        "containerPath": "/tmp/spark",
-        "hostPath": "/tmp/spark",
-        "mode": "RO"
-      }
-    ],
-    "docker": {
-      "image": "janr/dcos-spark-cli:v6",
-      "portMappings": [],
-      "privileged": false,
-      "parameters": [],
-      "forcePullImage": false
-    }
-  },
-  "healthChecks": [
-    {
-      "gracePeriodSeconds": 300,
-      "intervalSeconds": 60,
-      "timeoutSeconds": 20,
-      "maxConsecutiveFailures": 5,
-      "delaySeconds": 15,
-      "command": {
-        "value": "/health_check.py"
-      },
-      "protocol": "COMMAND"
-    }
-  ],
-  "secrets": {
-    "secret0": {
-      "source": "stream-login"
-    }
-  },
-  "portDefinitions": [
-    {
-      "port": 0,
-      "protocol": "tcp",
-      "name": "default"
-    }
-  ],
-  "requirePorts": false,
+  "user": "root",
   "env": {
-    "LOGIN_TOKEN": {
-      "secret": "secret0"
+    "SPARK_NAME": "wordcount",
+    "MESOS_CONTAINERIZER": "mesos",
+    "MESOS_PRINCIPAL": "spark-principal",
+    "MESOS_ROLE": "*",
+    "SPARK_USER": "root",
+    "SPARK_DRIVER_CORES": "1",
+    "SPARK_DRIVER_MEM": "512m",
+    "SPARK_CORES_MAX": "6",
+    "SPARK_DOCKER_IMAGE": "janr/spark-streaming-kafka:2.1.0-2.2.1-1-hadoop-2.6-nobody-99",
+    "SPARK_EXECUTOR_HOME": "/opt/spark/dist",
+    "SPARK_JAR": "streamingWordCount-CNI.py",
+    "SPARK_ARGS": ""
+  },
+  "fetch": [
+    {
+      "uri": "https://gist.githubusercontent.com/jrx/56e72ada489bf36646525c34fdaa7d63/raw/90df6046886e7c50fb18ea258a7be343727e944c/streamingWordCount-CNI.py"
+    }
+  ],
+  "cmd": "/opt/spark/dist/bin/spark-submit --conf spark.app.name=${SPARK_NAME} --conf spark.mesos.containerizer=${MESOS_CONTAINERIZER} --conf spark.mesos.principal=${MESOS_PRINCIPAL} --conf spark.mesos.role=${MESOS_ROLE} --conf spark.mesos.driverEnv.SPARK_USER=${SPARK_USER} --conf spark.driver.cores=${SPARK_DRIVER_CORES} --conf spark.driver.memory=${SPARK_DRIVER_MEM} --conf spark.cores.max=${SPARK_CORES_MAX} --conf spark.mesos.executor.docker.image=${SPARK_DOCKER_IMAGE} --conf spark.executor.home=${SPARK_EXECUTOR_HOME} ${MESOS_SANDBOX}/${SPARK_JAR} ${SPARK_ARGS}",
+  "container": {
+    "type": "MESOS",
+    "docker": {
+      "image": "janr/spark-streaming-kafka:2.1.0-2.2.1-1-hadoop-2.6-nobody-99",
+      "forcePullImage": false
     },
-    "SPARK_SUBMIT_STDOUT": "/mnt/mesos/sandbox/spark-out",
-    "SPARK_NAME": "wordcount"
-  }
+    "portMappings": [
+      {
+        "containerPort": 4040,
+        "hostPort": 0,
+        "protocol": "tcp",
+        "name": "driver-ui"
+      }
+    ]
+  },
+  "networks": [
+    {
+      "mode": "container/bridge"
+    }
+  ],
+  "upgradeStrategy": {
+    "maximumOverCapacity": 0,
+    "minimumHealthCapacity": 0
+  },
+  "labels": {
+    "MARATHON_SINGLE_INSTANCE_APP": "true"
+  },
+  "requirePorts": false
 }
-```
-
-## 5. Connect to the Driver UI
-
-- Submit a long running Job
-
-- **Example 1:** Do port forwarding using SSH
-
-- Retrieve the IP Address of the Spark driver
-
-```
-$ dcos spark status driver-20170817111145-0001 | grep ip_address:
-ip_address: "10.0.2.215"
-```
-
-- Setup port forwarding using SSH (Note: Default port for Spark UI is 4040)
-
-```
-$ ssh -A -p22 core@34.209.32.162 -L 4040:10.0.2.215:4040
-open http://localhost:4040/jobs
-```
-
-- **Example 2:** Use DC/OS Tunnel
-[DC/OS Tunnel Documentation](https://docs.mesosphere.com/1.9/developing-services/tunnel/)
-
-```
-# on mac
-$ dcos package install tunnel-cli --cli
-
-# Option 1:
-$ brew install openvpn
-$ sudo dcos tunnel vpn --client=/usr/local/sbin/openvpn
-
-open http://10.0.2.215:4040/jobs
-
-# Option 2: Use Tunnelblick OpenVPN
-$ sudo dcos tunnel vpn --client=/Applications/Tunnelblick.app/Contents/Resources/openvpn/openvpn-*/openvpn
-
-open http://10.0.2.215:4040/jobs
 ```
