@@ -188,13 +188,13 @@ dcos spark kill driver-20180829130652-0008
 
 ```json
 {
-  "id": "/stream",
+  "id": "/stream-wordcount",
   "cpus": 1,
   "mem": 1024,
   "instances": 1,
   "user": "root",
   "env": {
-    "SPARK_NAME": "wordcount",
+    "SPARK_NAME": "stream-wordcount",
     "MESOS_CONTAINERIZER": "mesos",
     "MESOS_PRINCIPAL": "spark-principal",
     "MESOS_ROLE": "*",
@@ -223,6 +223,9 @@ dcos spark kill driver-20180829130652-0008
       {
         "containerPort": 4040,
         "hostPort": 0,
+        "labels": {
+          "VIP_0": "/stream-wordcount:4040"
+        },
         "protocol": "tcp",
         "name": "driver-ui"
       }
@@ -242,4 +245,129 @@ dcos spark kill driver-20180829130652-0008
   },
   "requirePorts": false
 }
+```
+
+## 4. Expose the Spark Driver UI via AdminRouter
+
+- The following guide exposes a specific Spark Driver UI via the DC/OS AdminRouter. It's using the Spark driver example started with Marathon from paragraph 3.2.
+
+- To make the Spark driver hostname and port configurable via Environment Variables we will base our proxy on OpenResty that enables Nginx to use LUA. Create a file called nginx.conf, that leverages the env variables and includes the proxy logic:
+
+```properties
+worker_processes  1;
+ 
+events {
+    worker_connections  1024;
+}
+ 
+env DRIVER_HOSTNAME;
+env DRIVER_PORT;
+env DRIVER_PATH;
+ 
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+ 
+    sendfile        on;
+    keepalive_timeout  65;
+ 
+    server {
+ 
+        set_by_lua $driver_hostname 'return os.getenv("DRIVER_HOSTNAME")';
+        set_by_lua $driver_port 'return os.getenv("DRIVER_PORT")';
+        set_by_lua $driver_path 'return os.getenv("DRIVER_PATH")';
+ 
+        listen 8080;
+ 
+        location / {
+            resolver 198.51.100.1;
+            proxy_pass         http://$driver_hostname:$driver_port;
+            proxy_redirect     off;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Host $server_name;
+ 
+            proxy_set_header Accept-Encoding '';
+            sub_filter 'href="/' "href=\"${driver_path}/";
+            sub_filter 'action="/' "action=\"${driver_path}/";
+            sub_filter 'src="/static' "src=\"${driver_path}/static";
+            sub_filter '/api/v1/applications' "${driver_path}/api/v1/applications";
+            sub_filter '/static/executorspage-template.html' "${driver_path}/static/executorspage-template.html";
+            sub_filter_types *;
+            sub_filter_once off;
+ 
+        }
+    }
+}
+```
+
+- Now create the **Dockerfile**:
+
+```Dockerfile
+FROM openresty/openresty:alpine
+COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
+```
+
+- Build and push the Container Image to your registry:
+
+```shell
+docker build --no-cache -t janr/adminrouter-proxy:v1 .
+docker push janr/adminrouter-proxy:v1
+```
+
+- Create a file **stream-wordcount-proxy.json** with the Marathon definition to deploy the proxy and adjust the parameters **DRIVER_HOSTNAME**, **DRIVER_PORT**, **DRIVER_PATH** and  **DCOS_SERVICE_NAME** to reflect your Spark app configuration:
+
+```json
+{
+  "id": "/stream-wordcount-proxy",
+  "container": {
+    "type": "MESOS",
+    "docker": {
+      "image": "janr/adminrouter-proxy:v1",
+      "forcePullImage": true
+    },
+    "portMappings": [
+      {
+        "containerPort": 8080,
+        "hostPort": 0,
+        "protocol": "tcp",
+        "name": "default"
+      }
+    ]
+  },
+  "cpus": 0.1,
+  "mem": 128,
+  "instances": 1,
+  "user": "root",
+  "env": {
+    "DRIVER_HOSTNAME": "stream-wordcount.marathon.l4lb.thisdcos.directory",
+    "DRIVER_PORT": "4040",
+    "DRIVER_PATH": "/service/stream-wordcount"
+  },
+  "labels": {
+    "DCOS_SERVICE_REWRITE_REQUEST_URLS": "false",
+    "DCOS_SERVICE_SCHEME": "http",
+    "DCOS_SERVICE_NAME": "stream-wordcount",
+    "DCOS_SERVICE_PORT_INDEX": "0"
+  },
+  "networks": [
+    {
+      "mode": "container/bridge"
+    }
+  ],
+  "requirePorts": false
+}
+```
+
+- Deploy the proxy via:
+
+```shell
+dcos marathon app add stream-wordcount-proxy.json
+```
+
+- To grant access to your Spark Proxy (stream-wordcount) via AdminRouter for non-SuperUsers, you can set the following permission in this example for a user called test:
+
+```shell
+dcos security org users grant test dcos:adminrouter:service:stream-wordcount full
 ```
