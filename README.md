@@ -7,7 +7,9 @@
 ```shell
 dcos security org service-accounts keypair /tmp/spark-private.pem /tmp/spark-public.pem
 dcos security org service-accounts create -p /tmp/spark-public.pem -d "Spark service account" spark-principal
+
 dcos security secrets create-sa-secret --strict /tmp/spark-private.pem spark-principal spark/secret
+dcos security secrets create-sa-secret --strict /tmp/spark-private.pem spark-principal stream-wordcount/secret
 ```
 
 - Grant permissions to the Spark Service Account
@@ -164,7 +166,7 @@ dcos spark run --verbose --submit-args=" \
 --conf spark.mesos.principal=spark-principal \
 --conf spark.mesos.driverEnv.SPARK_USER=root \
 --conf spark.cores.max=6 \
---conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:2.1.0-2.2.1-1-hadoop-2.6-nobody-99 \
+--conf spark.mesos.executor.docker.image=janr/spark-streaming-kafka:2.7.0-2.4.0-hadoop-2.7-nobody-99 \
 --conf spark.mesos.executor.docker.forcePullImage=true \
 https://gist.githubusercontent.com/jrx/56e72ada489bf36646525c34fdaa7d63/raw/90df6046886e7c50fb18ea258a7be343727e944c/streamingWordCount-CNI.py"
 ```
@@ -192,37 +194,45 @@ dcos spark kill driver-20180829130652-0008
   "cpus": 1,
   "mem": 1024,
   "instances": 1,
-  "user": "root",
+  "user": "nobody",
   "env": {
+    "DCOS_SERVICE_ACCOUNT_CREDENTIAL": {
+      "secret": "secret0"
+    },
     "SPARK_NAME": "stream-wordcount",
     "MESOS_CONTAINERIZER": "mesos",
     "MESOS_PRINCIPAL": "spark-principal",
     "MESOS_ROLE": "*",
-    "SPARK_USER": "root",
+    "SPARK_MASTER_URL": "mesos://zk://zk-1.zk:2181,zk-2.zk:2181,zk-3.zk:2181,zk-4.zk:2181,zk-5.zk:2181/mesos",
+    "SPARK_USER": "nobody",
     "SPARK_DRIVER_CORES": "1",
     "SPARK_DRIVER_MEM": "512m",
     "SPARK_CORES_MAX": "6",
-    "SPARK_DOCKER_IMAGE": "janr/spark-streaming-kafka:2.1.0-2.2.1-1-hadoop-2.6-nobody-99",
-    "SPARK_EXECUTOR_HOME": "/opt/spark/dist",
+    "SPARK_DOCKER_IMAGE": "janr/spark-streaming-kafka:2.7.0-2.4.0-hadoop-2.7-nobody-99",
+    "SPARK_EXECUTOR_HOME": "/opt/spark/",
     "SPARK_JAR": "streamingWordCount-CNI.py",
     "SPARK_ARGS": ""
+  },
+  "secrets": {
+    "secret0": {
+      "source": "stream-wordcount/secret"
+    }
   },
   "fetch": [
     {
       "uri": "https://gist.githubusercontent.com/jrx/56e72ada489bf36646525c34fdaa7d63/raw/90df6046886e7c50fb18ea258a7be343727e944c/streamingWordCount-CNI.py"
     }
   ],
-  "cmd": "/opt/spark/dist/bin/spark-submit --conf spark.app.name=${SPARK_NAME} --conf spark.mesos.containerizer=${MESOS_CONTAINERIZER} --conf spark.mesos.principal=${MESOS_PRINCIPAL} --conf spark.mesos.role=${MESOS_ROLE} --conf spark.mesos.driverEnv.SPARK_USER=${SPARK_USER} --conf spark.driver.cores=${SPARK_DRIVER_CORES} --conf spark.driver.memory=${SPARK_DRIVER_MEM} --conf spark.cores.max=${SPARK_CORES_MAX} --conf spark.mesos.executor.docker.image=${SPARK_DOCKER_IMAGE} --conf spark.executor.home=${SPARK_EXECUTOR_HOME} ${MESOS_SANDBOX}/${SPARK_JAR} ${SPARK_ARGS}",
+  "cmd": "/opt/spark/bin/spark-submit --master ${SPARK_MASTER_URL} --conf spark.app.name=${SPARK_NAME} --conf spark.mesos.containerizer=${MESOS_CONTAINERIZER} --conf spark.mesos.principal=${MESOS_PRINCIPAL} --conf spark.mesos.role=${MESOS_ROLE} --conf spark.mesos.driverEnv.SPARK_USER=${SPARK_USER} --conf spark.driver.cores=${SPARK_DRIVER_CORES} --conf spark.driver.memory=${SPARK_DRIVER_MEM} --conf spark.cores.max=${SPARK_CORES_MAX} --conf spark.mesos.executor.docker.image=${SPARK_DOCKER_IMAGE} --conf spark.executor.home=${SPARK_EXECUTOR_HOME} ${MESOS_SANDBOX}/${SPARK_JAR} ${SPARK_ARGS}",
   "container": {
     "type": "MESOS",
     "docker": {
-      "image": "janr/spark-streaming-kafka:2.1.0-2.2.1-1-hadoop-2.6-nobody-99",
+      "image": "janr/spark-streaming-kafka:2.7.0-2.4.0-hadoop-2.7-nobody-99",
       "forcePullImage": false
     },
     "portMappings": [
       {
-        "containerPort": 4040,
-        "hostPort": 0,
+        "port": 0,
         "labels": {
           "VIP_0": "/stream-wordcount:4040"
         },
@@ -233,7 +243,7 @@ dcos spark kill driver-20180829130652-0008
   },
   "networks": [
     {
-      "mode": "container/bridge"
+      "mode": "host"
     }
   ],
   "upgradeStrategy": {
